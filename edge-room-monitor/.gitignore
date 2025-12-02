@@ -1,0 +1,11 @@
+# Build artifacts generated inside the container
+build/
+
+# Dependency marker created by run_in_container.sh
+.deps_installed
+
+# General editor/OS clutter
+*.swp
+*.swo
+*.log
+.DS_Store
