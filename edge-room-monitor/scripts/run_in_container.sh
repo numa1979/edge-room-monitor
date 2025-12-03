@@ -31,6 +31,11 @@ if [ ! -f "$MARKER_FILE" ]; then
   touch "$MARKER_FILE"
 fi
 
+MODEL_PREP_SCRIPT="$APP_ROOT/scripts/prepare_models.sh"
+if [ -x "$MODEL_PREP_SCRIPT" ]; then
+  "$MODEL_PREP_SCRIPT"
+fi
+
 info "CMake configure"
 mkdir -p "$BUILD_DIR"
 (cd "$BUILD_DIR" && cmake -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo "$APP_ROOT")

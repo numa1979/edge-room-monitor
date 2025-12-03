@@ -1,5 +1,9 @@
 # Build artifacts generated inside the container
 build/
+models/*
+!models/README.md
+!models/.gitkeep
+!models/*.url
 
 # Dependency marker created by run_in_container.sh
 .deps_installed
