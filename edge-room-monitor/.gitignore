@@ -4,6 +4,10 @@ build/
 # Dependency marker created by run_in_container.sh
 .deps_installed
 
+# Local scratch notes
+memo.txt
+memos/
+
 # General editor/OS clutter
 *.swp
 *.swo

@@ -31,12 +31,18 @@ if ! "${DOCKER[@]}" info --format '{{json .Runtimes}}' | grep -q 'nvidia'; then
 fi
 
 DEVICE_ARGS=()
+FIRST_VIDEO_DEV=""
 for dev in /dev/video*; do
   [[ -e "$dev" ]] || continue
   DEVICE_ARGS+=(--device "$dev:$dev")
+  if [[ -z "$FIRST_VIDEO_DEV" ]]; then
+    FIRST_VIDEO_DEV="$dev"
+  fi
 done
 if ((${#DEVICE_ARGS[@]} == 0)); then
   warn "/dev/video* が見つかりません。USB カメラがマウントされません"
+else
+  info "USB カメラを検出: ${FIRST_VIDEO_DEV}"
 fi
 
 if "${DOCKER[@]}" ps -a --format '{{.Names}}' | grep -Fxq "$CONTAINER_NAME"; then
@@ -62,11 +68,16 @@ start_container() {
     extra_args+=(--privileged)
   fi
 
+  local env_args=(-e "APP_HTTP_PORT=$APP_HTTP_PORT")
+  if [[ -n "$FIRST_VIDEO_DEV" ]]; then
+    env_args+=(-e "APP_CAMERA_DEVICE=$FIRST_VIDEO_DEV")
+  fi
+
   "${DOCKER[@]}" run -d \
     --name "$CONTAINER_NAME" \
     --runtime "$CONTAINER_RUNTIME" \
     --network "$DOCKER_NETWORK" \
-    -e APP_HTTP_PORT="$APP_HTTP_PORT" \
+    "${env_args[@]}" \
     -v "$REPO_ROOT:/workspace/edge-room-monitor" \
     "${DEVICE_ARGS[@]}" \
     "${extra_args[@]}" \

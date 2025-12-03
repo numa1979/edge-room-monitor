@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Edge Room Monitor Preview</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        background: #1e1b23;
+        color: #f7f1ff;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 16px;
+        margin: 32px;
+      }
+      #preview {
+        border: 2px solid #f7f1ff;
+        border-radius: 6px;
+        background: #000;
+        max-width: 90vw;
+        max-height: 70vh;
+      }
+      label {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        width: 360px;
+      }
+      input {
+        padding: 6px 8px;
+        border-radius: 4px;
+        border: 1px solid #9480ff;
+        font-size: 14px;
+      }
+      button {
+        padding: 8px 18px;
+        border: none;
+        border-radius: 4px;
+        background: #9480ff;
+        color: #1e1b23;
+        font-weight: bold;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>MJPEG プレビュー</h1>
+    <label>
+      Jetson のストリーム URL
+      <input id="stream-url" type="text" value="http://127.0.0.1:8080/" />
+    </label>
+    <button id="apply">表示</button>
+    <img id="preview" alt="MJPEG preview" />
+    <script>
+      const input = document.getElementById("stream-url");
+      const preview = document.getElementById("preview");
+      document.getElementById("apply").addEventListener("click", () => {
+        const url = input.value.trim();
+        if (!url) {
+          alert("ストリーム URL を入力してください");
+          return;
+        }
+        preview.src = url;
+      });
+    </script>
+  </body>
+</html>
