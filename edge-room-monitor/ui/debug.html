@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Debug API</title>
+    <style>
+        body {
+            font-family: monospace;
+            padding: 20px;
+            background: #1e1b23;
+            color: #f7f1ff;
+        }
+
+        button {
+            padding: 10px;
+            margin: 5px;
+            font-size: 16px;
+        }
+
+        pre {
+            background: #2a2630;
+            padding: 10px;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>API Debug</h1>
+
+    <button onclick="testDetections()">GET /api/detections</button>
+    <button onclick="testSelect()">POST /api/select (ID:4)</button>
+    <button onclick="testUnselect()">POST /api/unselect</button>
+
+    <h2>Response:</h2>
+    <pre id="output">クリックしてテスト...</pre>
+
+    <script>
+        const API_BASE = window.location.origin;
+
+        async function testDetections() {
+            try {
+                const response = await fetch(`${API_BASE}/api/detections`);
+                const data = await response.json();
+                document.getElementById('output').textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                document.getElementById('output').textContent = 'ERROR: ' + error.message;
+            }
+        }
+
+        async function testSelect() {
+            try {
+                const response = await fetch(`${API_BASE}/api/select`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tracking_id: 4 })
+                });
+                const data = await response.json();
+                document.getElementById('output').textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                document.getElementById('output').textContent = 'ERROR: ' + error.message;
+            }
+        }
+
+        async function testUnselect() {
+            try {
+                const response = await fetch(`${API_BASE}/api/unselect`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({})
+                });
+                const data = await response.json();
+                document.getElementById('output').textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                document.getElementById('output').textContent = 'ERROR: ' + error.message;
+            }
+        }
+    </script>
+</body>
+
+</html>

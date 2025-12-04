@@ -1,68 +1,254 @@
 <!DOCTYPE html>
 <html lang="ja">
-  <head>
-    <meta charset="UTF-8" />
-    <title>Edge Room Monitor Preview</title>
-    <style>
-      body {
-        font-family: sans-serif;
-        background: #1e1b23;
-        color: #f7f1ff;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 16px;
-        margin: 32px;
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Edge Room Monitor - Tap to Track</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: sans-serif;
+      background: #1e1b23;
+      color: #f7f1ff;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+      padding: 20px;
+    }
+
+    h1 {
+      font-size: 24px;
+    }
+
+    #info {
+      background: #2a2630;
+      padding: 12px 20px;
+      border-radius: 6px;
+      font-size: 14px;
+    }
+
+    #container {
+      position: relative;
+      border: 2px solid #9480ff;
+      border-radius: 6px;
+      overflow: hidden;
+      background: #000;
+    }
+
+    #stream {
+      display: block;
+      max-width: 90vw;
+      max-height: 70vh;
+    }
+
+    #canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      cursor: pointer;
+    }
+
+    .status {
+      background: #2a2630;
+      padding: 8px 16px;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+
+    .selected {
+      color: #4ade80;
+      font-weight: bold;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>🎯 Tap to Track - 人物追跡</h1>
+  <div id="info">
+    <div>📹 ストリーム: <span id="stream-status">接続中...</span></div>
+    <div>👤 選択中: <span id="selected-status" class="selected">なし</span></div>
+    <div>💡 使い方: 人物のボックスをクリックして追跡開始/解除</div>
+  </div>
+  <div id="container">
+    <img id="stream" alt="MJPEG stream" />
+    <canvas id="canvas"></canvas>
+  </div>
+  <div class="status">
+    検出数: <span id="detection-count">0</span> 人
+  </div>
+
+  <script>
+    const API_BASE = window.location.origin;
+    const STREAM_URL = `${API_BASE}/stream`;
+    const DETECTIONS_URL = `${API_BASE}/api/detections`;
+    const SELECT_URL = `${API_BASE}/api/select`;
+    const UNSELECT_URL = `${API_BASE}/api/unselect`;
+
+    const stream = document.getElementById('stream');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+
+    let detections = [];
+    let selectedTrackingId = null;
+    let streamWidth = 640;
+    let streamHeight = 480;
+
+    // ストリーム読み込み
+    stream.src = STREAM_URL;
+    stream.onload = () => {
+      document.getElementById('stream-status').textContent = '接続済み ✓';
+      updateCanvasSize();
+    };
+    stream.onerror = () => {
+      document.getElementById('stream-status').textContent = '接続エラー ✗';
+    };
+
+    // Canvas サイズ調整
+    function updateCanvasSize() {
+      canvas.width = stream.clientWidth;
+      canvas.height = stream.clientHeight;
+      streamWidth = stream.naturalWidth || 640;
+      streamHeight = stream.naturalHeight || 480;
+    }
+    window.addEventListener('resize', updateCanvasSize);
+
+    // 検出情報を定期取得
+    async function fetchDetections() {
+      try {
+        const response = await fetch(DETECTIONS_URL);
+        const data = await response.json();
+        detections = data.detections || [];
+        document.getElementById('detection-count').textContent = detections.length;
+        drawBoundingBoxes();
+      } catch (error) {
+        console.error('Failed to fetch detections:', error);
       }
-      #preview {
-        border: 2px solid #f7f1ff;
-        border-radius: 6px;
-        background: #000;
-        max-width: 90vw;
-        max-height: 70vh;
-      }
-      label {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-        width: 360px;
-      }
-      input {
-        padding: 6px 8px;
-        border-radius: 4px;
-        border: 1px solid #9480ff;
-        font-size: 14px;
-      }
-      button {
-        padding: 8px 18px;
-        border: none;
-        border-radius: 4px;
-        background: #9480ff;
-        color: #1e1b23;
-        font-weight: bold;
-        cursor: pointer;
-      }
-    </style>
-  </head>
-  <body>
-    <h1>MJPEG プレビュー</h1>
-    <label>
-      Jetson のストリーム URL
-      <input id="stream-url" type="text" value="http://127.0.0.1:8080/" />
-    </label>
-    <button id="apply">表示</button>
-    <img id="preview" alt="MJPEG preview" />
-    <script>
-      const input = document.getElementById("stream-url");
-      const preview = document.getElementById("preview");
-      document.getElementById("apply").addEventListener("click", () => {
-        const url = input.value.trim();
-        if (!url) {
-          alert("ストリーム URL を入力してください");
+    }
+
+    // バウンディングボックス描画
+    function drawBoundingBoxes() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      const scaleX = canvas.width / streamWidth;
+      const scaleY = canvas.height / streamHeight;
+
+      detections.forEach(det => {
+        const x = det.bbox.left * scaleX;
+        const y = det.bbox.top * scaleY;
+        const w = det.bbox.width * scaleX;
+        const h = det.bbox.height * scaleY;
+
+        const isSelected = det.tracking_id === selectedTrackingId;
+
+        // ボックス描画
+        ctx.strokeStyle = isSelected ? '#00ff00' : '#ff0000';
+        ctx.lineWidth = isSelected ? 6 : 3;
+        ctx.strokeRect(x, y, w, h);
+
+        // ラベル背景
+        const label = isSelected
+          ? `👤 追跡中 ID:${det.tracking_id}`
+          : `ID:${det.tracking_id} (タップ)`;
+        ctx.font = isSelected ? 'bold 20px sans-serif' : 'bold 16px sans-serif';
+        const textWidth = ctx.measureText(label).width;
+
+        ctx.fillStyle = isSelected ? '#00ff00' : '#ff0000';
+        ctx.fillRect(x, y - 30, textWidth + 16, 30);
+
+        // ラベルテキスト
+        ctx.fillStyle = '#000000';
+        ctx.fillText(label, x + 8, y - 8);
+
+        // デバッグ情報
+        const debugLabel = `conf:${det.confidence.toFixed(2)}`;
+        ctx.font = '14px sans-serif';
+        ctx.fillStyle = isSelected ? '#00ff00' : '#ff0000';
+        ctx.fillRect(x, y + h - 24, 100, 24);
+        ctx.fillStyle = '#000000';
+        ctx.fillText(debugLabel, x + 4, y + h - 6);
+      });
+    }
+
+    // クリックイベント処理
+    canvas.addEventListener('click', async (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const clickX = e.clientX - rect.left;
+      const clickY = e.clientY - rect.top;
+
+      console.log(`Click at: ${clickX}, ${clickY}`);
+
+      const scaleX = canvas.width / streamWidth;
+      const scaleY = canvas.height / streamHeight;
+
+      // クリックされたボックスを探す
+      for (const det of detections) {
+        const x = det.bbox.left * scaleX;
+        const y = det.bbox.top * scaleY;
+        const w = det.bbox.width * scaleX;
+        const h = det.bbox.height * scaleY;
+
+        console.log(`Checking bbox: x=${x}, y=${y}, w=${w}, h=${h}, id=${det.tracking_id}`);
+
+        if (clickX >= x && clickX <= x + w && clickY >= y && clickY <= y + h) {
+          console.log(`HIT! Toggling ID: ${det.tracking_id}`);
+          await toggleSelection(det.tracking_id);
           return;
         }
-        preview.src = url;
-      });
-    </script>
-  </body>
+      }
+      console.log('No bbox clicked');
+    });
+
+    // 選択/解除トグル
+    async function toggleSelection(trackingId) {
+      console.log(`toggleSelection called with ID: ${trackingId}, current selected: ${selectedTrackingId}`);
+
+      if (selectedTrackingId === trackingId) {
+        // 解除
+        console.log('Unselecting...');
+        try {
+          const response = await fetch(UNSELECT_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tracking_id: trackingId })
+          });
+          const result = await response.json();
+          console.log('Unselect response:', result);
+          selectedTrackingId = null;
+          document.getElementById('selected-status').textContent = 'なし';
+        } catch (error) {
+          console.error('Failed to unselect:', error);
+        }
+      } else {
+        // 選択
+        console.log('Selecting...');
+        try {
+          const response = await fetch(SELECT_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tracking_id: trackingId })
+          });
+          const result = await response.json();
+          console.log('Select response:', result);
+          selectedTrackingId = trackingId;
+          document.getElementById('selected-status').textContent = `ID: ${trackingId}`;
+        } catch (error) {
+          console.error('Failed to select:', error);
+        }
+      }
+      drawBoundingBoxes();
+    }
+
+    // 定期更新開始
+    setInterval(fetchDetections, 100); // 100ms = 10fps
+    fetchDetections();
+  </script>
+</body>
+
 </html>

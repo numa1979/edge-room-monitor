@@ -12,7 +12,20 @@ pkg_check_modules(GSTREAMER REQUIRED
 )
 find_package(Threads REQUIRED)
 
+link_directories(/opt/nvidia/deepstream/deepstream/lib)
+
 add_executable(edge-room-monitor src/main.cpp)
+target_include_directories(edge-room-monitor PRIVATE 
+    ${GSTREAMER_INCLUDE_DIRS}
+    /opt/nvidia/deepstream/deepstream/sources/includes
+)
+target_link_libraries(edge-room-monitor PRIVATE 
+    ${GSTREAMER_LIBRARIES} 
+    Threads::Threads
+    nvdsgst_meta
+    nvds_meta
+)
+target_compile_options(edge-room-monitor PRIVATE ${GSTREAMER_CFLAGS_OTHER})
 
 # YOLOv8 custom parser library
 add_library(nvdsinfer_yolov8 SHARED src/yolov8_parser.cpp)
@@ -24,6 +37,3 @@ set_target_properties(nvdsinfer_yolov8 PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
     OUTPUT_NAME "nvdsinfer_custom_impl_yolov8"
 )
-target_include_directories(edge-room-monitor PRIVATE ${GSTREAMER_INCLUDE_DIRS})
-target_link_libraries(edge-room-monitor PRIVATE ${GSTREAMER_LIBRARIES} Threads::Threads)
-target_compile_options(edge-room-monitor PRIVATE ${GSTREAMER_CFLAGS_OTHER})
