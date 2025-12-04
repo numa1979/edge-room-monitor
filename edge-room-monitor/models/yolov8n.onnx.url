@@ -1,0 +1,5 @@
+# Provide a direct-download URL to the YOLOv8n ONNX file.
+# The script reads the first non-empty, non-comment line.
+# Example (Hugging Face raw URL):
+# https://huggingface.co/SpotLab/YOLOv8Detection/resolve/3005c6751fb19cdeb6b10c066185908faf66a097/yolov8n.onnx?download=1
+

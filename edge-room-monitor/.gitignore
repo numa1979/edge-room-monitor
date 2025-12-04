@@ -5,6 +5,9 @@ models/*
 !models/.gitkeep
 !models/*.url
 
+# Custom parser binaries
+lib/
+
 # Dependency marker created by run_in_container.sh
 .deps_installed
 

@@ -1,0 +1,74 @@
+feat: Implement YOLOv8 person detection and tracking with DeepStream
+
+## 主な変更
+
+### 新機能
+- YOLOv8nによる人物検出（カスタムパーサー実装）
+- nvtrackerによる人物追跡（各人物にIDを割り当て）
+- MJPEGストリーミング（http://[jetson-ip]:8080）
+- バウンディングボックスとラベルの表示
+
+### 実装詳細
+
+#### カスタムYOLOv8パーサー (src/yolov8_parser.cpp)
+- YOLOv8出力形式 [1, 84, 8400] に対応
+- 座標の正規化値を640x640ピクセルに変換
+- 人物クラス（class 0）のみをフィルタリング
+- カスタムNMS実装（IOU閾値: 0.45）
+- 検出閾値: 0.5（誤検出を削減）
+
+#### パイプライン設定
+- camera_infer.pipeline: 推論＋追跡パイプライン
+- camera_preview.pipeline: プレビュー専用パイプライン
+- nvtracker統合（IOU tracker使用）
+
+#### 設定ファイル
+- yolov8n_infer_config.txt: YOLOv8推論設定
+  - interval=2（2フレームに1回推論）
+  - 解像度: 640x640
+  - FP16モード
+- nvtracker_config.yml: トラッカー設定
+  - 最小信頼度: 0.3
+  - 最小バウンディングボックス面積: 100
+
+### パフォーマンス
+- FPS: 約15fps（interval=2）
+- 推論時間: 約60-70ms/フレーム
+- メモリ使用量: 約2.5GB
+- フレームドロップ: 最小限
+
+### 削除したファイル
+- third_party/: サードパーティYOLOライブラリ（セグフォルト問題のため削除）
+- lib/libnvdsinfer_custom_impl_Yolo_v8.so: 古いライブラリ
+- scripts/build_yolo_parser.sh: 不要なビルドスクリプト
+- configs/camera_test.pipeline: テスト用パイプライン
+
+### 技術的な課題と解決策
+
+#### 問題1: サードパーティYOLOライブラリのセグフォルト
+- 原因: engine-create-func-name関数でクラッシュ
+- 解決: カスタムパーサーを一から実装
+
+#### 問題2: YOLOv8出力の座標スケーリング
+- 原因: 座標が0-1の正規化値だった
+- 解決: networkInfo.width/heightで640倍にスケール
+
+#### 問題3: DeepStreamクラスタリングでセグフォルト
+- 原因: cluster-mode設定とパーサー出力の不整合
+- 解決: パーサー内でNMS実装、cluster-mode無効化
+
+#### 問題4: カメラデバイスの競合
+- 原因: 2つのv4l2srcが同じデバイスを使用
+- 解決: teeで分岐する構造に変更
+
+### 次の開発予定
+1. タップ・ツー・トラック機能
+2. 再識別（Re-ID）機能
+3. イベント記録機能
+
+### テスト環境
+- Jetson Nano 4GB
+- DeepStream 6.0.1
+- CUDA 10.2
+- TensorRT 8.0
+- Ubuntu 18.04 (コンテナ内)

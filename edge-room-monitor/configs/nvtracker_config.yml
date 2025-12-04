@@ -1,0 +1,9 @@
+%YAML:1.0
+iou-tracker:
+  tracker-width: 640
+  tracker-height: 384
+  tracker-type: 0
+  display-tracking-id: 1
+  tracking-min-bbox-area: 100
+  tracking-min-conf: 0.3
+  enable-batch-process: 1

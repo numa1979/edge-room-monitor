@@ -198,6 +198,8 @@ int main() {
   const std::string pipeline_path =
       pipeline_env && *pipeline_env ? pipeline_env
                                     : "configs/camera_preview.pipeline";
+  
+  std::cout << "Loading pipeline from: " << pipeline_path << std::endl;
 
   std::string pipeline_desc;
   try {

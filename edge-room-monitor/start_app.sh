@@ -72,6 +72,9 @@ start_container() {
   if [[ -n "$FIRST_VIDEO_DEV" ]]; then
     env_args+=(-e "APP_CAMERA_DEVICE=$FIRST_VIDEO_DEV")
   fi
+  if [[ -n "${PIPELINE_CONFIG:-}" ]]; then
+    env_args+=(-e "PIPELINE_CONFIG=$PIPELINE_CONFIG")
+  fi
 
   "${DOCKER[@]}" run -d \
     --name "$CONTAINER_NAME" \
