@@ -172,12 +172,19 @@
             font-size: 14px;
             font-weight: bold;
             transition: all 0.3s;
+            touch-action: manipulation;
+            -webkit-tap-highlight-color: rgba(0, 217, 255, 0.3);
         }
 
         button:hover,
         button:active {
             background: #00d9ff;
             color: #16213e;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
         }
 
         button.danger {
@@ -501,13 +508,26 @@
 
         async function resetAll() {
             if (confirm('追跡とアラートをリセットしますか？\n（部屋にいる人を再度自動登録します）')) {
-                // 全員の追跡を解除
-                await fetch('/api/clear', { method: 'POST' });
-                // アラートをクリア
-                await fetch('/api/clear_alerts', { method: 'POST' });
-                alerts = [];
-                lastAlertCount = 0;
-                updateData();
+                const btn = event.target;
+                btn.disabled = true;
+                btn.textContent = '🔄 リセット中...';
+
+                try {
+                    // 並列実行で高速化
+                    await Promise.all([
+                        fetch('/api/clear', { method: 'POST' }),
+                        fetch('/api/clear_alerts', { method: 'POST' })
+                    ]);
+                    alerts = [];
+                    lastAlertCount = 0;
+                    await updateData();
+                } catch (err) {
+                    console.error('Reset failed:', err);
+                    alert('リセットに失敗しました');
+                } finally {
+                    btn.disabled = false;
+                    btn.textContent = '🔄 リセット';
+                }
             }
         }
 
