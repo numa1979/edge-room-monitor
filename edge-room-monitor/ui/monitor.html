@@ -336,7 +336,7 @@
             </div>
 
             <div class="controls">
-                <button onclick="resetAll()">🔄 リセット</button>
+                <button id="resetBtn">🔄 リセット</button>
             </div>
         </div>
     </div>
@@ -506,9 +506,8 @@
             updateData();
         }
 
-        async function resetAll() {
+        async function resetAll(btn) {
             if (confirm('追跡とアラートをリセットしますか？\n（部屋にいる人を再度自動登録します）')) {
-                const btn = event.target;
                 btn.disabled = true;
                 btn.textContent = '🔄 リセット中...';
 
@@ -530,6 +529,12 @@
                 }
             }
         }
+
+        // イベントリスナーを設定（スマホ対応）
+        document.getElementById('resetBtn').addEventListener('click', function (e) {
+            e.preventDefault();
+            resetAll(this);
+        });
 
         setInterval(updateData, 1000);
         updateData();
