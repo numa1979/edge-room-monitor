@@ -90,10 +90,10 @@ extern "C" bool NvDsInferParseCustomYoloV8(
     
     const float* data = static_cast<const float*>(layer.buffer);
     const int numClasses = 80;
-    const float confThreshold = 0.5f;  // Higher threshold to reduce false positives
+    const float confThreshold = 0.4f;  // 信頼度閾値: 40%以上で検出（横たわり時も安定検出）
     const int personClassId = 0;  // COCO person class
     
-    std::cout << "[YOLOv8] Processing " << numAnchors << " detections" << std::endl;
+    // std::cout << "[YOLOv8] Processing " << numAnchors << " detections" << std::endl;
     
     for (int i = 0; i < numAnchors; ++i) {
         // YOLOv8 output is transposed: data is organized as [attr][anchor]
@@ -158,7 +158,7 @@ extern "C" bool NvDsInferParseCustomYoloV8(
         apply_nms(objectList, 0.45f);
     }
     
-    std::cout << "[YOLOv8] Detected " << objectList.size() << " person(s)" << std::endl;
+    // std::cout << "[YOLOv8] Detected " << objectList.size() << " person(s)" << std::endl;
     
     return true;
 }

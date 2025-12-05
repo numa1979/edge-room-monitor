@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <title>患者見守りシステム</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            overflow: hidden;
+        }
+
+        .container {
+            display: flex;
+            height: 100vh;
+        }
+
+        .video-panel {
+            flex: 1;
+            position: relative;
+            background: #0f0f1e;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 0;
+        }
+
+        #videoCanvas {
+            max-width: 100%;
+            max-height: 100%;
+            cursor: pointer;
+        }
+
+        .sidebar {
+            width: 350px;
+            background: #16213e;
+            padding: 20px;
+            overflow-y: auto;
+            border-left: 2px solid #0f3460;
+        }
+
+        h1 {
+            font-size: 20px;
+            margin-bottom: 20px;
+            color: #00d9ff;
+            border-bottom: 2px solid #0f3460;
+            padding-bottom: 10px;
+        }
+
+        h2 {
+            font-size: 16px;
+            margin: 20px 0 10px 0;
+            color: #00d9ff;
+        }
+
+        .mode-indicator {
+            padding: 8px;
+            border-radius: 4px;
+            text-align: center;
+            margin-bottom: 15px;
+            font-weight: bold;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .mode-indicator.auto {
+            background: #27ae60;
+        }
+
+        .mode-indicator.manual {
+            background: #e67e22;
+        }
+
+        .info-box {
+            background: #0f3460;
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+            font-size: 12px;
+            line-height: 1.6;
+            color: #bbb;
+        }
+
+        .alert-item {
+            background: #e74c3c;
+            padding: 12px;
+            margin-bottom: 10px;
+            border-radius: 6px;
+            border-left: 4px solid #c0392b;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.7;
+            }
+        }
+
+        .alert-type {
+            font-weight: bold;
+            font-size: 14px;
+            margin-bottom: 4px;
+        }
+
+        .alert-message {
+            font-size: 12px;
+            margin-bottom: 4px;
+        }
+
+        .alert-time {
+            font-size: 11px;
+            color: #bbb;
+        }
+
+        .person-item {
+            background: #0f3460;
+            padding: 10px;
+            margin-bottom: 8px;
+            border-radius: 4px;
+            border-left: 4px solid #00d9ff;
+        }
+
+        .person-id {
+            font-weight: bold;
+            margin-bottom: 4px;
+        }
+
+        .person-status {
+            font-size: 12px;
+            color: #bbb;
+        }
+
+        button {
+            width: 100%;
+            padding: 12px;
+            margin-bottom: 10px;
+            background: #0f3460;
+            color: #00d9ff;
+            border: 2px solid #00d9ff;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: bold;
+            transition: all 0.3s;
+        }
+
+        button:hover,
+        button:active {
+            background: #00d9ff;
+            color: #16213e;
+        }
+
+        button.danger {
+            background: #e74c3c;
+            border-color: #c0392b;
+            color: white;
+        }
+
+        button.danger:hover {
+            background: #c0392b;
+        }
+
+        .no-alerts {
+            text-align: center;
+            padding: 20px;
+            color: #7f8c8d;
+            font-size: 14px;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .stat-box {
+            background: #0f3460;
+            padding: 10px;
+            border-radius: 4px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #00d9ff;
+        }
+
+        .stat-label {
+            font-size: 11px;
+            color: #bbb;
+            margin-top: 4px;
+        }
+
+        /* スマホ対応 */
+        @media (max-width: 768px) {
+            .container {
+                flex-direction: column;
+            }
+
+            .video-panel {
+                height: 45vh;
+                min-height: 250px;
+            }
+
+            .sidebar {
+                width: 100%;
+                height: 55vh;
+                border-left: none;
+                border-top: 2px solid #0f3460;
+                padding: 15px;
+            }
+
+            h1 {
+                font-size: 18px;
+            }
+
+            h2 {
+                font-size: 15px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="video-panel">
+            <canvas id="videoCanvas"></canvas>
+        </div>
+        <div class="sidebar">
+            <h1>🏥 患者見守りシステム</h1>
+
+            <div class="mode-indicator auto" id="modeIndicator" onclick="toggleMode()">
+                ✓ 自動追跡モード（クリックで切替）
+            </div>
+
+            <div class="info-box">
+                📌 <strong>異常検知:</strong><br>
+                • 転倒（急激な姿勢変化）<br>
+                • 徘徊（フレームアウト）<br>
+                <br>
+                <strong>状態記録:</strong><br>
+                • 横たわり状態（ログのみ）<br>
+                <br>
+                <strong>操作:</strong><br>
+                • 自動モード: タップで解除<br>
+                • 手動モード: タップで登録/解除
+            </div>
+
+            <div class="stats">
+                <div class="stat-box">
+                    <div class="stat-value" id="trackedCount">0</div>
+                    <div class="stat-label">追跡中</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-value" id="alertCount">0</div>
+                    <div class="stat-label">アラート</div>
+                </div>
+            </div>
+
+            <h2>🚨 アラート</h2>
+            <div id="alertsList">
+                <div class="no-alerts">アラートなし</div>
+            </div>
+
+            <h2>👥 追跡中の患者</h2>
+            <div id="personsList">
+                <div class="no-alerts">追跡中の患者なし</div>
+            </div>
+
+            <div class="controls">
+                <button onclick="manualRefresh()">🔄 手動更新</button>
+                <button onclick="clearAlerts()">アラートをクリア</button>
+                <button onclick="clearAll()" class="danger">全員の追跡を解除</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('videoCanvas');
+        const ctx = canvas.getContext('2d');
+
+        let img = new Image();
+        let detections = [];
+        let alerts = [];
+        let lastAlertCount = 0;
+        let autoRegisterMode = true;
+
+        const ALERT_TYPES = {
+            1: '⚠️ 転倒',
+            2: '⚠️ ベッド落下',
+            3: '⚠️ ベッド離脱',
+            4: '📍 横たわり継続',
+            5: '❓ 徘徊の可能性'
+        };
+
+        const COLORS = ['#00ff00', '#00ffff', '#ffff00', '#ff00ff'];
+
+        // MJPEG stream
+        img.onload = function () {
+            canvas.width = img.width;
+            canvas.height = img.height;
+            ctx.drawImage(img, 0, 0);
+
+            // Draw detections
+            detections.forEach(det => {
+                const bbox = det.bbox;
+                const isRegistered = det.registered;
+                const fixedId = det.fixed_id;
+
+                if (isRegistered) {
+                    ctx.strokeStyle = COLORS[fixedId % 4];
+                    ctx.fillStyle = COLORS[fixedId % 4];
+                    ctx.lineWidth = 3;
+                } else {
+                    ctx.strokeStyle = '#ff0000';
+                    ctx.fillStyle = '#ff0000';
+                    ctx.lineWidth = 2;
+                }
+
+                ctx.strokeRect(bbox.left, bbox.top, bbox.width, bbox.height);
+
+                const label = isRegistered ? `患者 ${fixedId}` : `未登録`;
+                const labelY = bbox.top > 25 ? bbox.top - 8 : bbox.top + bbox.height + 20;
+
+                ctx.font = 'bold 16px sans-serif';
+                const textWidth = ctx.measureText(label).width;
+                ctx.fillRect(bbox.left, labelY - 18, textWidth + 10, 22);
+                ctx.fillStyle = '#000';
+                ctx.fillText(label, bbox.left + 5, labelY - 2);
+            });
+
+            img.src = '/stream?' + new Date().getTime();
+        };
+
+        img.onerror = function () {
+            setTimeout(() => {
+                img.src = '/stream?' + new Date().getTime();
+            }, 1000);
+        };
+
+        img.src = '/stream';
+
+        // Click to register/unregister
+        canvas.addEventListener('click', async (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+            const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+
+            for (const det of detections) {
+                const bbox = det.bbox;
+                if (x >= bbox.left && x <= bbox.left + bbox.width &&
+                    y >= bbox.top && y <= bbox.top + bbox.height) {
+
+                    if (det.registered) {
+                        // Unregister
+                        await fetch('/api/unregister', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ nvtracker_id: det.nvtracker_id })
+                        });
+                        console.log('Unregistered:', det.nvtracker_id);
+                    } else if (!autoRegisterMode) {
+                        // Register (manual mode only)
+                        await fetch('/api/register', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ nvtracker_id: det.nvtracker_id })
+                        });
+                        console.log('Registered:', det.nvtracker_id);
+                    }
+                    break;
+                }
+            }
+        });
+
+        async function toggleMode() {
+            const res = await fetch('/api/toggle_auto_register', { method: 'POST' });
+            const data = await res.json();
+            autoRegisterMode = data.auto_register;
+            updateModeIndicator();
+        }
+
+        function updateModeIndicator() {
+            const indicator = document.getElementById('modeIndicator');
+            if (autoRegisterMode) {
+                indicator.className = 'mode-indicator auto';
+                indicator.textContent = '✓ 自動追跡モード（クリックで切替）';
+            } else {
+                indicator.className = 'mode-indicator manual';
+                indicator.textContent = '✓ 手動選択モード（クリックで切替）';
+            }
+        }
+
+        async function updateData() {
+            try {
+                const [detRes, alertRes, configRes] = await Promise.all([
+                    fetch('/api/detections'),
+                    fetch('/api/alerts'),
+                    fetch('/api/config')
+                ]);
+
+                const detData = await detRes.json();
+                const alertData = await alertRes.json();
+                const configData = await configRes.json();
+
+                detections = detData.detections || [];
+                alerts = alertData.alerts || [];
+                autoRegisterMode = configData.auto_register;
+
+                if (alerts.length > lastAlertCount) {
+                    // Play sound
+                }
+                lastAlertCount = alerts.length;
+
+                updateModeIndicator();
+                updateUI();
+            } catch (err) {
+                console.error('Failed to fetch data:', err);
+            }
+        }
+
+        function updateUI() {
+            const trackedCount = detections.filter(d => d.registered).length;
+            document.getElementById('trackedCount').textContent = trackedCount;
+            document.getElementById('alertCount').textContent = alerts.filter(a => !a.acknowledged).length;
+
+            const alertsList = document.getElementById('alertsList');
+            const activeAlerts = alerts.filter(a => !a.acknowledged);
+            if (activeAlerts.length === 0) {
+                alertsList.innerHTML = '<div class="no-alerts">アラートなし</div>';
+            } else {
+                alertsList.innerHTML = activeAlerts.map((alert) => {
+                    const date = new Date(alert.timestamp);
+                    const timeStr = date.toLocaleTimeString('ja-JP');
+                    return `
+            <div class="alert-item">
+              <div class="alert-type">⚠️ ${ALERT_TYPES[alert.type] || '不明'}</div>
+              <div class="alert-message">患者 ${alert.fixed_id}: ${alert.message}</div>
+              <div class="alert-time">${timeStr}</div>
+            </div>
+          `;
+                }).reverse().join('');
+            }
+
+            const personsList = document.getElementById('personsList');
+            const tracked = detections.filter(d => d.registered);
+            if (tracked.length === 0) {
+                personsList.innerHTML = '<div class="no-alerts">追跡中の患者なし</div>';
+            } else {
+                personsList.innerHTML = tracked.map(det => `
+          <div class="person-item">
+            <div class="person-id">患者 ${det.fixed_id}</div>
+            <div class="person-status">bbox: ${Math.round(det.bbox.width)}x${Math.round(det.bbox.height)}</div>
+            <div class="person-status">信頼度: ${(det.confidence * 100).toFixed(1)}%</div>
+          </div>
+        `).join('');
+            }
+        }
+
+        function manualRefresh() {
+            updateData();
+        }
+
+        async function clearAlerts() {
+            await fetch('/api/clear_alerts', { method: 'POST' });
+            alerts = [];
+            lastAlertCount = 0;
+            updateUI();
+        }
+
+        async function clearAll() {
+            if (confirm('全員の追跡を解除しますか？')) {
+                await fetch('/api/clear', { method: 'POST' });
+            }
+        }
+
+        setInterval(updateData, 1000);
+        updateData();
+    </script>
+</body>
+
+</html>

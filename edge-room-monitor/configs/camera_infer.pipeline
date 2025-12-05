@@ -1,12 +1,12 @@
 nvstreammux name=mux batch-size=1 width=640 height=640 live-source=1 batched-push-timeout=40000000 buffer-pool-size=4 !
   nvinfer config-file-path=/workspace/edge-room-monitor/configs/yolov8n_infer_config.txt unique-id=1 !
-  nvtracker tracker-width=640 tracker-height=384 ll-lib-file=/opt/nvidia/deepstream/deepstream/lib/libnvds_nvmultiobjecttracker.so ll-config-file=/workspace/edge-room-monitor/configs/nvtracker_config.yml !
+  nvtracker tracker-width=640 tracker-height=384 ll-lib-file=/opt/nvidia/deepstream/deepstream/lib/libnvds_nvmultiobjecttracker.so ll-config-file=/workspace/edge-room-monitor/configs/nvtracker_config.yml compute-hw=1 !
   nvvideoconvert !
   nvdsosd process-mode=0 display-text=1 !
   nvvideoconvert !
   video/x-raw, format=I420 !
   videoconvert !
-  jpegenc quality=60 !
+  jpegenc quality=50 !
   appsink name=preview_sink emit-signals=false sync=false max-buffers=1 drop=true
 
 v4l2src device=/dev/video0 !

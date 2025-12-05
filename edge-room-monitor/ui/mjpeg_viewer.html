@@ -88,17 +88,18 @@
     const API_BASE = window.location.origin;
     const STREAM_URL = `${API_BASE}/stream`;
     const DETECTIONS_URL = `${API_BASE}/api/detections`;
-    const SELECT_URL = `${API_BASE}/api/select`;
-    const UNSELECT_URL = `${API_BASE}/api/unselect`;
+    const REGISTER_URL = `${API_BASE}/api/register`;
+    const UNREGISTER_URL = `${API_BASE}/api/unregister`;
 
     const stream = document.getElementById('stream');
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
 
     let detections = [];
-    let selectedTrackingId = null;
     let streamWidth = 640;
     let streamHeight = 480;
+
+    const COLORS = ['#00ff00', '#00ffff', '#ffff00', '#ff00ff'];  // 固定ID 0-3の色
 
     // ストリーム読み込み
     stream.src = STREAM_URL;
@@ -125,7 +126,13 @@
         const response = await fetch(DETECTIONS_URL);
         const data = await response.json();
         detections = data.detections || [];
+
+        // 登録済み人数をカウント
+        const registeredCount = detections.filter(d => d.registered).length;
         document.getElementById('detection-count').textContent = detections.length;
+        document.getElementById('selected-status').textContent =
+          registeredCount > 0 ? `${registeredCount}人登録中` : 'なし';
+
         drawBoundingBoxes();
       } catch (error) {
         console.error('Failed to fetch detections:', error);
@@ -145,21 +152,22 @@
         const w = det.bbox.width * scaleX;
         const h = det.bbox.height * scaleY;
 
-        const isSelected = det.tracking_id === selectedTrackingId;
+        const isRegistered = det.registered;
+        const color = isRegistered ? COLORS[det.fixed_id % COLORS.length] : '#ff0000';
 
         // ボックス描画
-        ctx.strokeStyle = isSelected ? '#00ff00' : '#ff0000';
-        ctx.lineWidth = isSelected ? 6 : 3;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = isRegistered ? 6 : 3;
         ctx.strokeRect(x, y, w, h);
 
         // ラベル背景
-        const label = isSelected
-          ? `👤 追跡中 ID:${det.tracking_id}`
-          : `ID:${det.tracking_id} (タップ)`;
-        ctx.font = isSelected ? 'bold 20px sans-serif' : 'bold 16px sans-serif';
+        const label = isRegistered
+          ? `👤 ID:${det.fixed_id} (追跡中)`
+          : `nvID:${det.nvtracker_id} (タップで登録)`;
+        ctx.font = isRegistered ? 'bold 20px sans-serif' : 'bold 16px sans-serif';
         const textWidth = ctx.measureText(label).width;
 
-        ctx.fillStyle = isSelected ? '#00ff00' : '#ff0000';
+        ctx.fillStyle = color;
         ctx.fillRect(x, y - 30, textWidth + 16, 30);
 
         // ラベルテキスト
@@ -167,10 +175,13 @@
         ctx.fillText(label, x + 8, y - 8);
 
         // デバッグ情報
-        const debugLabel = `conf:${det.confidence.toFixed(2)}`;
+        const debugLabel = isRegistered
+          ? `nvID:${det.nvtracker_id}`
+          : `conf:${det.confidence.toFixed(2)}`;
         ctx.font = '14px sans-serif';
-        ctx.fillStyle = isSelected ? '#00ff00' : '#ff0000';
-        ctx.fillRect(x, y + h - 24, 100, 24);
+        ctx.fillStyle = color;
+        const debugWidth = ctx.measureText(debugLabel).width;
+        ctx.fillRect(x, y + h - 24, debugWidth + 8, 24);
         ctx.fillStyle = '#000000';
         ctx.fillText(debugLabel, x + 4, y + h - 6);
       });
@@ -194,55 +205,48 @@
         const w = det.bbox.width * scaleX;
         const h = det.bbox.height * scaleY;
 
-        console.log(`Checking bbox: x=${x}, y=${y}, w=${w}, h=${h}, id=${det.tracking_id}`);
-
         if (clickX >= x && clickX <= x + w && clickY >= y && clickY <= y + h) {
-          console.log(`HIT! Toggling ID: ${det.tracking_id}`);
-          await toggleSelection(det.tracking_id);
+          console.log(`HIT! nvtracker_id=${det.nvtracker_id}, fixed_id=${det.fixed_id}, registered=${det.registered}`);
+          await toggleRegistration(det);
           return;
         }
       }
       console.log('No bbox clicked');
     });
 
-    // 選択/解除トグル
-    async function toggleSelection(trackingId) {
-      console.log(`toggleSelection called with ID: ${trackingId}, current selected: ${selectedTrackingId}`);
-
-      if (selectedTrackingId === trackingId) {
-        // 解除
-        console.log('Unselecting...');
+    // 登録/解除トグル
+    async function toggleRegistration(det) {
+      if (det.registered) {
+        // 登録解除
+        console.log(`Unregistering Fixed ID ${det.fixed_id}...`);
         try {
-          const response = await fetch(UNSELECT_URL, {
+          const response = await fetch(UNREGISTER_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ tracking_id: trackingId })
+            body: JSON.stringify({ fixed_id: det.fixed_id })
           });
           const result = await response.json();
-          console.log('Unselect response:', result);
-          selectedTrackingId = null;
-          document.getElementById('selected-status').textContent = 'なし';
+          console.log('Unregister response:', result);
         } catch (error) {
-          console.error('Failed to unselect:', error);
+          console.error('Failed to unregister:', error);
         }
       } else {
-        // 選択
-        console.log('Selecting...');
+        // 登録
+        console.log(`Registering nvtracker_id ${det.nvtracker_id}...`);
         try {
-          const response = await fetch(SELECT_URL, {
+          const response = await fetch(REGISTER_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ tracking_id: trackingId })
+            body: JSON.stringify({ nvtracker_id: det.nvtracker_id })
           });
           const result = await response.json();
-          console.log('Select response:', result);
-          selectedTrackingId = trackingId;
-          document.getElementById('selected-status').textContent = `ID: ${trackingId}`;
+          console.log('Register response:', result);
         } catch (error) {
-          console.error('Failed to select:', error);
+          console.error('Failed to register:', error);
         }
       }
-      drawBoundingBoxes();
+      // すぐに更新
+      await fetchDetections();
     }
 
     // 定期更新開始

@@ -1,9 +1,34 @@
 %YAML:1.0
-iou-tracker:
-  tracker-width: 640
-  tracker-height: 384
-  tracker-type: 0
-  display-tracking-id: 1
-  tracking-min-bbox-area: 100
-  tracking-min-conf: 0.3
-  enable-batch-process: 1
+NvDCF:
+  # Re-ID対応のNvDCFトラッカー
+  useUniqueID: 1
+  maxTargetsPerStream: 30
+  
+  # 追跡パラメータ（さらに緩く）
+  minDetectorConfidence: 0.1  # YOLOv8の検出を最大限受け入れる
+  minTrackerConfidence: 0.01  # 追跡の継続を優先
+  
+  # 追跡の持続性（最大限に）
+  maxShadowTrackingAge: 900  # 900フレーム（約60秒）追跡を維持
+  probationAge: 1
+  maxZombieAge: 900
+  
+  # 外観モデル（色情報とヒストグラムを使用）
+  useColorNames: 1
+  useBackgroundSubtraction: 0
+  
+  # マッチング閾値（極端に緩く - 姿勢変化に対応）
+  minIouThreshold4Match: 0.0001
+  minIouThreshold4Unmatched: 0.0001
+  
+  # 姿勢変化への対応
+  enableReAssoc: 1  # 再関連付けを有効化
+  minMatchingScore4Overall: 0.0001
+  minMatchingScore4ReidSimilarity: 0.0001
+  
+  # Re-ID関連
+  filterLr: 0.05
+  spatialWeight: 0.3
+  
+  # その他
+  earlyTerminationAge: 1

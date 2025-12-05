@@ -5,17 +5,22 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <array>
 #include <atomic>
 #include <cerrno>
 #include <chrono>
+#include <cmath>
 #include <csignal>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <map>
 #include <mutex>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -38,7 +43,7 @@ void signal_handler(int) {
 }
 
 struct Detection {
-  uint64_t tracking_id;
+  uint64_t tracking_id;  // nvtrackerの一時ID
   int class_id;
   float confidence;
   float left;
@@ -46,6 +51,50 @@ struct Detection {
   float width;
   float height;
 };
+
+enum AlertType {
+  ALERT_NONE = 0,
+  ALERT_FALL = 1,           // 転倒
+  ALERT_BED_FALL = 2,       // ベッドから落下
+  ALERT_BED_EXIT = 3,       // ベッド離脱
+  ALERT_LYING_FLOOR = 4,    // 床で横たわり
+  ALERT_FRAME_OUT = 5       // フレームアウト（徘徊の可能性）
+};
+
+struct Alert {
+  int fixed_id;
+  AlertType type;
+  std::chrono::steady_clock::time_point timestamp;
+  std::string message;
+  bool acknowledged;  // 確認済みフラグ
+};
+
+struct RegisteredPerson {
+  int fixed_id;  // 固定ID (0-3)
+  uint64_t current_nvtracker_id;  // 現在のnvtracker ID
+  float bbox_width;
+  float bbox_height;
+  float bbox_left;
+  float bbox_top;
+  float stable_bbox_top;  // 安定時の頭の位置（Y座標）
+  float stable_bbox_height;  // 安定時の高さ（立っている時）
+  float sitting_bbox_height;  // 座っている時の高さ
+  float prev_bbox_top;  // 前フレームの頭位置（転倒検知用）
+  float prev_bbox_height;  // 前フレームの高さ（転倒検知用）
+  std::chrono::steady_clock::time_point last_seen;
+  std::chrono::steady_clock::time_point lying_start;
+  std::chrono::steady_clock::time_point standing_confirmed;  // 立っている状態が確定した時刻
+  std::chrono::steady_clock::time_point sitting_confirmed;  // 座っている状態が確定した時刻
+  std::chrono::steady_clock::time_point head_position_recorded;  // 頭の位置を記録した時刻
+  std::chrono::steady_clock::time_point last_update;  // 最後に更新した時刻（転倒検知用）
+  int frame_count;  // フレームカウント
+  bool active;  // 追跡中かどうか
+  bool is_lying;  // 横たわっているか
+  bool is_sitting;  // 座っているか
+  bool was_standing;  // 前は立っていたか（確定状態）
+};
+
+
 
 std::string load_pipeline_description(const std::string &path) {
   std::ifstream ifs(path);
@@ -121,9 +170,356 @@ class FrameStore {
 
 class DetectionStore {
  public:
+  static constexpr int MAX_REGISTERED_PERSONS = 4;  // 最大4人（Jetson Nano性能考慮）
+  
+ private:
+  bool auto_register_enabled_ = true;  // 自動登録モード
+  
+ public:
+  void set_auto_register(bool enabled) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto_register_enabled_ = enabled;
+    std::cout << "[config] Auto-register mode: " << (enabled ? "enabled" : "disabled") << std::endl;
+  }
+  
+  bool get_auto_register() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return auto_register_enabled_;
+  }
+  
+  DetectionStore() {
+    // 配列を初期化（全員未登録状態）
+    for (auto &person : registered_persons_) {
+      person.fixed_id = -1;
+      person.current_nvtracker_id = 0;
+      person.bbox_width = 0.0f;
+      person.bbox_height = 0.0f;
+      person.bbox_left = 0.0f;
+      person.bbox_top = 0.0f;
+      person.stable_bbox_top = 0.0f;
+      person.stable_bbox_height = 0.0f;
+      person.sitting_bbox_height = 0.0f;
+      person.prev_bbox_top = 0.0f;
+      person.prev_bbox_height = 0.0f;
+      person.frame_count = 0;
+      person.active = false;
+      person.is_lying = false;
+      person.is_sitting = false;
+      person.was_standing = false;
+    }
+  }
+  
+
+  
+  std::vector<Alert> get_alerts() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return alerts_;
+  }
+  
+  void acknowledge_alert(size_t index) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (index < alerts_.size()) {
+      alerts_[index].acknowledged = true;
+    }
+  }
+  
+  void acknowledge_alerts_for_person(int fixed_id) {
+    // 注意: この関数は既にmutex_がロックされている状態で呼ばれる
+    // 内部用の関数なのでロックしない
+    for (auto &alert : alerts_) {
+      if (alert.fixed_id == fixed_id && !alert.acknowledged) {
+        alert.acknowledged = true;
+        std::cout << "[Alert] Auto-acknowledged alert for ID " << fixed_id << std::endl;
+      }
+    }
+  }
+  
+  void clear_alerts() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    alerts_.clear();
+  }
+  
+
+  
   void update(const std::vector<Detection> &detections) {
     std::lock_guard<std::mutex> lock(mutex_);
     detections_ = detections;
+    auto now = std::chrono::steady_clock::now();
+    
+    // 自動登録: 未登録の検出を自動で追跡開始（モードが有効な場合のみ）
+    if (auto_register_enabled_) {
+      for (const auto &det : detections) {
+        bool already_tracked = false;
+        for (const auto &person : registered_persons_) {
+          if (person.active && person.current_nvtracker_id == det.tracking_id) {
+            already_tracked = true;
+            break;
+          }
+        }
+        
+        if (!already_tracked) {
+          // 空きスロットを探して自動登録（最大4人まで）
+          for (auto &person : registered_persons_) {
+            if (!person.active) {
+              person.fixed_id = &person - &registered_persons_[0];
+              person.current_nvtracker_id = det.tracking_id;
+            person.bbox_width = det.width;
+            person.bbox_height = det.height;
+            person.bbox_left = det.left;
+            person.bbox_top = det.top;
+            person.stable_bbox_top = det.top;  // 初期頭位置を記録
+            person.stable_bbox_height = det.height;  // 初期高さを記録
+            person.sitting_bbox_height = 0.0f;
+            person.prev_bbox_top = det.top;
+            person.prev_bbox_height = det.height;
+            person.last_seen = now;
+            person.last_update = now;
+            person.lying_start = now;
+            person.standing_confirmed = now;
+            person.sitting_confirmed = now;
+            person.head_position_recorded = now;
+            person.frame_count = 0;
+            person.active = true;
+            person.is_lying = (det.width > det.height * 1.8f);  // 1.8倍で横たわり判定
+            person.is_sitting = false;
+            person.was_standing = !person.is_lying;
+            
+            std::cout << "[Auto] Registered nvtracker=" << det.tracking_id 
+                     << " as Fixed ID " << person.fixed_id << std::endl;
+            break;
+          }
+        }
+      }
+    }
+    
+    // 登録済み人物の追跡と異常検知
+    for (auto &person : registered_persons_) {
+      if (!person.active) continue;
+      
+      bool found = false;
+      for (const auto &det : detections) {
+        if (det.tracking_id == person.current_nvtracker_id) {
+          found = true;
+          
+          // フレームカウント
+          person.frame_count++;
+          
+          // 転倒検知: 前フレームとの比較（10フレーム以上追跡後）
+          if (person.frame_count >= 10 && person.was_standing && person.prev_bbox_height > 100.0f) {
+            auto time_diff = std::chrono::duration_cast<std::chrono::milliseconds>(
+                now - person.last_update).count();
+            
+            // 急激な変化を検知（2秒以内）
+            if (time_diff > 0 && time_diff <= 2000) {
+              // 高さが50%以上減少（立っている→しゃがむ/倒れる）
+              float height_ratio = det.height / person.prev_bbox_height;
+              // 頭の位置が大きく下がった（画面下方向 = Y座標増加）
+              float top_diff = det.top - person.prev_bbox_top;
+              
+              // デバッグ: 急激な変化を検出
+              if (height_ratio < 0.7f && top_diff > 50.0f) {
+                std::cout << "[Fall Check] ID " << person.fixed_id 
+                         << " height_ratio:" << std::fixed << std::setprecision(2) << height_ratio
+                         << " top_diff:" << (int)top_diff 
+                         << " prev_h:" << (int)person.prev_bbox_height << std::endl;
+              }
+              
+              // 転倒条件: 高さが30%以上減少 OR 頭が大きく下がった
+              if ((height_ratio < 0.7f && top_diff > person.prev_bbox_height * 0.3f) ||
+                  (height_ratio < 0.5f && top_diff > person.prev_bbox_height * 0.15f)) {
+                // 転倒検知！（add_alert内で重複チェックあり）
+                add_alert(person.fixed_id, ALERT_FALL, 
+                         "Sudden fall detected", now);
+                // ログは1回だけ出す（重複防止）
+                bool already_alerted = false;
+                for (const auto &alert : alerts_) {
+                  if (alert.fixed_id == person.fixed_id && alert.type == ALERT_FALL && !alert.acknowledged) {
+                    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                        now - alert.timestamp).count();
+                    if (elapsed < 5) {
+                      already_alerted = true;
+                      break;
+                    }
+                  }
+                }
+                if (!already_alerted) {
+                  std::cout << "[Alert] Fixed ID " << person.fixed_id 
+                           << " FALL detected! height:" << (int)person.prev_bbox_height 
+                           << "->" << (int)det.height 
+                           << " top:" << (int)person.prev_bbox_top << "->" << (int)det.top << std::endl;
+                }
+              }
+            }
+          }
+          
+          // 位置・姿勢情報を更新
+          person.prev_bbox_top = person.bbox_top;
+          person.prev_bbox_height = person.bbox_height;
+          person.bbox_width = det.width;
+          person.bbox_height = det.height;
+          person.bbox_left = det.left;
+          person.bbox_top = det.top;
+          person.last_seen = now;
+          person.last_update = now;
+          
+          // 姿勢判定
+          // 横たわり = 幅が高さより大きい（横向きbbox）
+          bool is_lying = (det.width > det.height * 1.2f);  // 1.2倍で横たわり判定（より敏感に）
+          bool is_sitting = false;
+          
+          // デバッグ: 姿勢判定（15フレームごと = 約1秒）
+          if (person.frame_count % 15 == 0) {
+            float ratio = det.width / det.height;
+            std::cout << "[Debug] ID " << person.fixed_id 
+                     << " bbox:" << (int)det.width << "x" << (int)det.height 
+                     << " ratio:" << std::fixed << std::setprecision(2) << ratio 
+                     << " lying:" << (is_lying ? "YES" : "NO") << std::endl;
+          }
+          
+          // 座っている判定: 立っている時の60-80%の高さ
+          if (!is_lying && person.stable_bbox_height > 100.0f) {
+            float height_ratio = det.height / person.stable_bbox_height;
+            is_sitting = (height_ratio >= 0.55f && height_ratio <= 0.85f);
+          }
+          
+          // 立っている状態が3秒以上続いたら確定
+          if (!is_lying && !is_sitting) {
+            auto standing_sec = std::chrono::duration_cast<std::chrono::seconds>(
+                now - person.standing_confirmed).count();
+            if (standing_sec >= 3) {
+              person.was_standing = true;
+              // 安定時の高さと頭位置を更新（立っている時の平均）
+              person.stable_bbox_height = (person.stable_bbox_height * 0.8f + det.height * 0.2f);
+              person.stable_bbox_top = (person.stable_bbox_top * 0.8f + det.top * 0.2f);
+              person.head_position_recorded = now;
+            }
+          } else {
+            // 横たわったら立っている確定時刻をリセット
+            person.standing_confirmed = now;
+          }
+          
+          // 座っている状態が2秒以上続いたら確定
+          if (is_sitting) {
+            auto sitting_sec = std::chrono::duration_cast<std::chrono::seconds>(
+                now - person.sitting_confirmed).count();
+            if (sitting_sec >= 2) {
+              person.is_sitting = true;
+              // 座っている時の高さを記録
+              person.sitting_bbox_height = (person.sitting_bbox_height * 0.7f + det.height * 0.3f);
+            }
+          } else {
+            person.sitting_confirmed = now;
+            if (!is_lying) {
+              person.is_sitting = false;
+            }
+          }
+          
+          // 異常検知
+          check_alerts(person, det, is_lying, now);
+          
+          person.is_lying = is_lying;
+          
+          break;
+        }
+      }
+      
+      // 見つからない場合（bbox消失）
+      if (!found) {
+        // 60秒以上見失ったら追跡解除（アラートは出さない）
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+            now - person.last_seen).count();
+        if (elapsed >= 60) {
+          std::cout << "[Track] Fixed ID " << person.fixed_id 
+                   << " tracking stopped (>60s) - may have left the area" << std::endl;
+          person.active = false;
+        }
+      }
+    }
+  }  // end of tracking loop
+}  // end of update()
+  
+ private:
+  void check_alerts(RegisteredPerson &person, const Detection &det, bool is_lying,
+                   std::chrono::steady_clock::time_point now) {
+    
+    // 最低10フレーム（約2秒）追跡してから異常検知開始
+    if (person.frame_count < 10) {
+      return;
+    }
+    
+    // 横たわり状態の記録（アラートは出さない、ログのみ）
+    if (is_lying) {
+      if (person.lying_start.time_since_epoch().count() == 0 || !person.is_lying) {
+        person.lying_start = now;
+        std::cout << "[State] ID " << person.fixed_id 
+                 << " 縦長→横長 (lying down)" << std::endl;
+      }
+    } else {
+      if (person.lying_start.time_since_epoch().count() != 0) {
+        auto lying_sec = std::chrono::duration_cast<std::chrono::seconds>(
+            now - person.lying_start).count();
+        std::cout << "[State] ID " << person.fixed_id 
+                 << " 横長→縦長 (standing up, was lying for " 
+                 << lying_sec << "s)" << std::endl;
+        // 起き上がったら、転倒アラートを自動確認
+        acknowledge_alerts_for_person(person.fixed_id);
+      }
+      person.lying_start = std::chrono::steady_clock::time_point();
+    }
+  }
+  
+  void add_alert(int fixed_id, AlertType type, const std::string &message,
+                std::chrono::steady_clock::time_point timestamp) {
+    // 重複アラート防止（同じ人の同じタイプのアラートが最近あれば追加しない）
+    for (const auto &alert : alerts_) {
+      if (alert.fixed_id == fixed_id && alert.type == type && !alert.acknowledged) {
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+            timestamp - alert.timestamp).count();
+        if (elapsed < 30) {  // 30秒以内は重複とみなす
+          return;  // 重複
+        }
+      }
+    }
+    
+    Alert alert;
+    alert.fixed_id = fixed_id;
+    alert.type = type;
+    alert.message = message;
+    alert.timestamp = timestamp;
+    alert.acknowledged = false;
+    alerts_.push_back(alert);
+    
+    std::cout << "[Alert] Fixed ID " << fixed_id << ": " << message << std::endl;
+  }
+  
+ public:
+  // 検出情報を取得（固定IDマッピング付き）
+  struct DetectionWithFixedId {
+    Detection detection;
+    int fixed_id;  // -1 = 未登録
+  };
+  
+  std::vector<DetectionWithFixedId> get_with_fixed_ids() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<DetectionWithFixedId> result;
+    
+    for (const auto &det : detections_) {
+      DetectionWithFixedId dwf;
+      dwf.detection = det;
+      dwf.fixed_id = -1;  // デフォルトは未登録
+      
+      // 登録済み人物のnvtracker IDと一致するか確認
+      for (const auto &person : registered_persons_) {
+        if (person.active && person.current_nvtracker_id == det.tracking_id) {
+          dwf.fixed_id = person.fixed_id;
+          break;
+        }
+      }
+      
+      result.push_back(dwf);
+    }
+    
+    return result;
   }
 
   std::vector<Detection> get() const {
@@ -131,46 +527,146 @@ class DetectionStore {
     return detections_;
   }
 
-  void set_selected(uint64_t tracking_id) {
+  // 手動登録（手動モード用）
+  bool register_by_nvtracker_id(uint64_t nvtracker_id) {
     std::lock_guard<std::mutex> lock(mutex_);
-    selected_tracking_id_ = tracking_id;
-    has_selection_ = true;
+    
+    // 既に登録されているか確認
+    for (const auto &person : registered_persons_) {
+      if (person.active && person.current_nvtracker_id == nvtracker_id) {
+        std::cout << "[api] Already registered: nvtracker=" << nvtracker_id << std::endl;
+        return false;
+      }
+    }
+    
+    // 空きスロットを探す
+    for (auto &person : registered_persons_) {
+      if (!person.active) {
+        // 検出情報から登録
+        for (const auto &det : detections_) {
+          if (det.tracking_id == nvtracker_id) {
+            auto now = std::chrono::steady_clock::now();
+            person.fixed_id = &person - &registered_persons_[0];
+            person.current_nvtracker_id = nvtracker_id;
+            person.bbox_width = det.width;
+            person.bbox_height = det.height;
+            person.bbox_left = det.left;
+            person.bbox_top = det.top;
+            person.stable_bbox_top = det.top;
+            person.stable_bbox_height = det.height;
+            person.sitting_bbox_height = 0.0f;
+            person.prev_bbox_top = det.top;
+            person.prev_bbox_height = det.height;
+            person.last_seen = now;
+            person.last_update = now;
+            person.lying_start = now;
+            person.standing_confirmed = now;
+            person.sitting_confirmed = now;
+            person.head_position_recorded = now;
+            person.frame_count = 0;
+            person.active = true;
+            person.is_lying = (det.width > det.height * 1.8f);
+            person.is_sitting = false;
+            person.was_standing = !person.is_lying;
+            
+            std::cout << "[api] Manually registered nvtracker=" << nvtracker_id 
+                     << " as Fixed ID " << person.fixed_id << std::endl;
+            return true;
+          }
+        }
+      }
+    }
+    
+    return false;
+  }
+  
+  // 固定IDを指定して登録解除（タップで解除）
+  bool unregister_by_nvtracker_id(uint64_t nvtracker_id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    for (auto &person : registered_persons_) {
+      if (person.active && person.current_nvtracker_id == nvtracker_id) {
+        std::cout << "[api] Unregistered nvtracker=" << nvtracker_id 
+                 << " (Fixed ID " << person.fixed_id << ")" << std::endl;
+        person.active = false;
+        return true;
+      }
+    }
+    
+    return false;
   }
 
-  void clear_selected() {
+  // 固定IDを指定して登録解除
+  bool unregister_person(int fixed_id) {
     std::lock_guard<std::mutex> lock(mutex_);
-    has_selection_ = false;
-    selected_tracking_id_ = 0;
-  }
-
-  bool get_selected(uint64_t &out_id) const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (has_selection_) {
-      out_id = selected_tracking_id_;
+    
+    if (fixed_id < 0 || fixed_id >= MAX_REGISTERED_PERSONS) {
+      return false;
+    }
+    
+    if (registered_persons_[fixed_id].active) {
+      registered_persons_[fixed_id].active = false;
+      std::cout << "[api] Unregistered Fixed ID " << fixed_id << std::endl;
+      std::cout.flush();
       return true;
     }
+    
     return false;
+  }
+
+  // 全員登録解除
+  void clear_all() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (auto &person : registered_persons_) {
+      person.active = false;
+    }
+    std::cout << "[api] Cleared all registrations" << std::endl;
+    std::cout.flush();
   }
 
  private:
   mutable std::mutex mutex_;
   std::vector<Detection> detections_;
-  uint64_t selected_tracking_id_{0};
-  bool has_selection_{false};
+  std::array<RegisteredPerson, MAX_REGISTERED_PERSONS> registered_persons_;
+  std::vector<Alert> alerts_;
 };
 
-std::string detections_to_json(const std::vector<Detection> &detections) {
+std::string detections_to_json(const std::vector<DetectionStore::DetectionWithFixedId> &detections) {
   std::ostringstream oss;
   oss << "{\"detections\":[";
   for (size_t i = 0; i < detections.size(); ++i) {
     if (i > 0) oss << ",";
-    const auto &d = detections[i];
+    const auto &d = detections[i].detection;
+    const int fixed_id = detections[i].fixed_id;
     oss << "{"
-        << "\"tracking_id\":" << d.tracking_id << ","
+        << "\"nvtracker_id\":" << d.tracking_id << ","
+        << "\"fixed_id\":" << fixed_id << ","
+        << "\"registered\":" << (fixed_id >= 0 ? "true" : "false") << ","
         << "\"class_id\":" << d.class_id << ","
         << "\"confidence\":" << d.confidence << ","
         << "\"bbox\":{\"left\":" << d.left << ",\"top\":" << d.top
         << ",\"width\":" << d.width << ",\"height\":" << d.height << "}"
+        << "}";
+  }
+  oss << "]}";
+  return oss.str();
+}
+
+std::string alerts_to_json(const std::vector<Alert> &alerts) {
+  std::ostringstream oss;
+  oss << "{\"alerts\":[";
+  for (size_t i = 0; i < alerts.size(); ++i) {
+    if (i > 0) oss << ",";
+    const auto &a = alerts[i];
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        a.timestamp.time_since_epoch()).count();
+    oss << "{"
+        << "\"index\":" << i << ","
+        << "\"fixed_id\":" << a.fixed_id << ","
+        << "\"type\":" << static_cast<int>(a.type) << ","
+        << "\"message\":\"" << a.message << "\","
+        << "\"timestamp\":" << ms << ","
+        << "\"acknowledged\":" << (a.acknowledged ? "true" : "false")
         << "}";
   }
   oss << "]}";
@@ -231,7 +727,7 @@ void serve_mjpeg_client(int client_fd, FrameStore &store) {
   }
 
   ::close(client_fd);
-  std::cout << "[http] MJPEG client disconnected" << std::endl;
+  // std::cout << "[http] MJPEG client disconnected" << std::endl;
 }
 
 std::string read_request_body(int client_fd, size_t content_length) {
@@ -249,9 +745,9 @@ std::string read_request_body(int client_fd, size_t content_length) {
   return std::string(buffer.data(), total_read);
 }
 
-uint64_t parse_tracking_id_from_json(const std::string &json) {
-  // Simple JSON parsing: {"tracking_id":123}
-  size_t pos = json.find("\"tracking_id\"");
+uint64_t parse_nvtracker_id_from_json(const std::string &json) {
+  // Simple JSON parsing: {"nvtracker_id":123}
+  size_t pos = json.find("\"nvtracker_id\"");
   if (pos == std::string::npos) return 0;
   pos = json.find(":", pos);
   if (pos == std::string::npos) return 0;
@@ -263,6 +759,27 @@ uint64_t parse_tracking_id_from_json(const std::string &json) {
     pos++;
   }
   return id;
+}
+
+int parse_fixed_id_from_json(const std::string &json) {
+  // Simple JSON parsing: {"fixed_id":0}
+  size_t pos = json.find("\"fixed_id\"");
+  if (pos == std::string::npos) return -1;
+  pos = json.find(":", pos);
+  if (pos == std::string::npos) return -1;
+  pos++;
+  while (pos < json.size() && std::isspace(json[pos])) pos++;
+  int id = 0;
+  bool negative = false;
+  if (pos < json.size() && json[pos] == '-') {
+    negative = true;
+    pos++;
+  }
+  while (pos < json.size() && std::isdigit(json[pos])) {
+    id = id * 10 + (json[pos] - '0');
+    pos++;
+  }
+  return negative ? -id : id;
 }
 
 void serve_api_client(int client_fd, const std::string &request,
@@ -282,17 +799,19 @@ void serve_api_client(int client_fd, const std::string &request,
     std::string path = request.substr(path_start, path_end - path_start);
     
     if (method == "GET" && path == "/api/detections") {
-      auto detections = detection_store.get();
+      auto detections = detection_store.get_with_fixed_ids();
       response_body = detections_to_json(detections);
-    } else if (method == "POST" && path == "/api/select") {
-      // Parse Content-Length
+    } else if (method == "GET" && path == "/api/alerts") {
+      auto alerts = detection_store.get_alerts();
+      response_body = alerts_to_json(alerts);
+    } else if (method == "POST" && path == "/api/unregister") {
+      // 自動登録モード: nvtracker IDを指定して登録解除
       size_t cl_pos = request.find("Content-Length:");
       size_t content_length = 0;
       if (cl_pos != std::string::npos) {
         content_length = std::atoi(request.c_str() + cl_pos + 15);
       }
       
-      // Read body
       size_t body_start = request.find("\r\n\r\n");
       std::string body;
       if (body_start != std::string::npos) {
@@ -302,20 +821,59 @@ void serve_api_client(int client_fd, const std::string &request,
         }
       }
       
-      uint64_t tracking_id = parse_tracking_id_from_json(body);
-      if (tracking_id > 0) {
-        detection_store.set_selected(tracking_id);
-        response_body = "{\"status\":\"selected\",\"tracking_id\":" + 
-                       std::to_string(tracking_id) + "}";
-        std::cout << "[api] Selected tracking_id: " << tracking_id << std::endl;
+      uint64_t nvtracker_id = parse_nvtracker_id_from_json(body);
+      bool success = detection_store.unregister_by_nvtracker_id(nvtracker_id);
+      
+      if (success) {
+        response_body = "{\"status\":\"unregistered\",\"nvtracker_id\":" + 
+                       std::to_string(nvtracker_id) + "}";
       } else {
-        response_body = "{\"error\":\"Invalid tracking_id\"}";
-        status = "400 Bad Request";
+        response_body = "{\"status\":\"failed\",\"nvtracker_id\":" + 
+                       std::to_string(nvtracker_id) + "}";
       }
-    } else if (method == "POST" && path == "/api/unselect") {
-      detection_store.clear_selected();
-      response_body = "{\"status\":\"unselected\"}";
-      std::cout << "[api] Unselected" << std::endl;
+    } else if (method == "POST" && path == "/api/clear") {
+      detection_store.clear_all();
+      response_body = "{\"status\":\"cleared\"}";
+    } else if (method == "POST" && path == "/api/clear_alerts") {
+      detection_store.clear_alerts();
+      response_body = "{\"status\":\"alerts_cleared\"}";
+    } else if (method == "POST" && path == "/api/register") {
+      // 手動登録
+      size_t cl_pos = request.find("Content-Length:");
+      size_t content_length = 0;
+      if (cl_pos != std::string::npos) {
+        content_length = std::atoi(request.c_str() + cl_pos + 15);
+      }
+      
+      size_t body_start = request.find("\r\n\r\n");
+      std::string body;
+      if (body_start != std::string::npos) {
+        body = request.substr(body_start + 4);
+        if (body.size() < content_length) {
+          body += read_request_body(client_fd, content_length - body.size());
+        }
+      }
+      
+      uint64_t nvtracker_id = parse_nvtracker_id_from_json(body);
+      bool success = detection_store.register_by_nvtracker_id(nvtracker_id);
+      
+      if (success) {
+        response_body = "{\"status\":\"registered\",\"nvtracker_id\":" + 
+                       std::to_string(nvtracker_id) + "}";
+      } else {
+        response_body = "{\"status\":\"failed\",\"nvtracker_id\":" + 
+                       std::to_string(nvtracker_id) + "}";
+      }
+    } else if (method == "POST" && path == "/api/toggle_auto_register") {
+      // 自動登録モードの切り替え
+      bool current = detection_store.get_auto_register();
+      detection_store.set_auto_register(!current);
+      response_body = "{\"status\":\"toggled\",\"auto_register\":" + 
+                     std::string(!current ? "true" : "false") + "}";
+    } else if (method == "GET" && path == "/api/config") {
+      // 設定取得
+      bool auto_reg = detection_store.get_auto_register();
+      response_body = "{\"auto_register\":" + std::string(auto_reg ? "true" : "false") + "}";
     } else {
       response_body = "{\"error\":\"Not found\"}";
       status = "404 Not Found";
@@ -476,6 +1034,7 @@ int main() {
                  l_obj = l_obj->next) {
               NvDsObjectMeta *obj_meta =
                   static_cast<NvDsObjectMeta *>(l_obj->data);
+              
               Detection d;
               d.tracking_id = obj_meta->object_id;
               d.class_id = obj_meta->class_id;
@@ -573,7 +1132,7 @@ int main() {
           continue;
         }
         
-        std::cout << "[http] " << request.substr(0, request.find('\r')) << std::endl;
+        // std::cout << "[http] " << request.substr(0, request.find('\r')) << std::endl;
         
         if (is_api_request(request)) {
           std::thread(serve_api_client, client, request,
@@ -583,10 +1142,13 @@ int main() {
         } else if (request.find("GET /debug") == 0) {
           std::thread(serve_html_file, client, 
                       std::string("/workspace/edge-room-monitor/ui/debug.html")).detach();
-        } else {
-          // Default: serve HTML UI
+        } else if (request.find("GET /old") == 0) {
           std::thread(serve_html_file, client, 
                       std::string("/workspace/edge-room-monitor/ui/mjpeg_viewer.html")).detach();
+        } else {
+          // Default: serve monitoring UI
+          std::thread(serve_html_file, client, 
+                      std::string("/workspace/edge-room-monitor/ui/monitor.html")).detach();
         }
       }
     });
