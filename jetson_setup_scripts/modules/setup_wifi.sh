@@ -97,4 +97,11 @@ fi
 echo "[wifi] Wi-Fi SSID='${SSID}' へ接続します"
 if ! sudo nmcli device wifi connect "$SSID" password "$PASS" ifname "$IFACE"; then
   warn "Wi-Fi への接続に失敗しましたが処理を継続します。SSID/PASS/IFACE を確認してください"
+else
+  ip_addr=$(ip -4 addr show "$IFACE" | awk '/inet / {print $2}' | head -n1)
+  if [ -n "$ip_addr" ]; then
+    info "接続成功: ${IFACE} に IP ${ip_addr}"
+  else
+    warn "接続しましたが ${IFACE} の IP を取得できませんでした"
+  fi
 fi
