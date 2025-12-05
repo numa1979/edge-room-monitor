@@ -95,8 +95,10 @@ if [ -z "$PASS" ]; then
 fi
 
 echo "[wifi] Wi-Fi SSID='${SSID}' へ接続します"
-if ! sudo nmcli device wifi connect "$SSID" password "$PASS" ifname "$IFACE"; then
-  warn "Wi-Fi への接続に失敗しましたが処理を継続します。SSID/PASS/IFACE を確認してください"
+sudo nmcli connection delete id "$SSID" >/dev/null 2>&1 || true
+if ! conn_output=$(sudo nmcli device wifi connect "$SSID" password "$PASS" ifname "$IFACE" 2>&1); then
+  warn "Wi-Fi への接続に失敗しました: ${conn_output}"
+  warn "SSID/PASS/IFACE を確認し、再実行してください"
 else
   ip_addr=$(ip -4 addr show "$IFACE" | awk '/inet / {print $2}' | head -n1)
   if [ -n "$ip_addr" ]; then
