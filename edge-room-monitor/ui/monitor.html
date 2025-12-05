@@ -447,12 +447,13 @@
             if (activeAlerts.length === 0) {
                 alertsList.innerHTML = '<div class="no-alerts">アラートなし</div>';
             } else {
-                alertsList.innerHTML = activeAlerts.map((alert) => {
+                alertsList.innerHTML = activeAlerts.map((alert, idx) => {
                     const date = new Date(alert.timestamp);
                     const timeStr = date.toLocaleTimeString('ja-JP');
+                    const alertType = ALERT_TYPES[alert.type] || '不明';
                     return `
-            <div class="alert-item">
-              <div class="alert-type">⚠️ ${ALERT_TYPES[alert.type] || '不明'}</div>
+            <div class="alert-item" onclick="acknowledgeAlert(${alert.index})" style="cursor: pointer;" title="クリックで確認">
+              <div class="alert-type">${alertType}</div>
               <div class="alert-message">患者 ${alert.fixed_id}: ${alert.message}</div>
               <div class="alert-time">${timeStr}</div>
             </div>
@@ -476,6 +477,15 @@
         }
 
         function manualRefresh() {
+            updateData();
+        }
+
+        async function acknowledgeAlert(index) {
+            await fetch('/api/acknowledge_alert', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ index: index })
+            });
             updateData();
         }
 

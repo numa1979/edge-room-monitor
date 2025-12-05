@@ -81,8 +81,10 @@ struct RegisteredPerson {
   float sitting_bbox_height;  // 座っている時の高さ
   float prev_bbox_top;  // 前フレームの頭位置（転倒検知用）
   float prev_bbox_height;  // 前フレームの高さ（転倒検知用）
+  float lying_bbox_top;  // 横たわり開始時のY座標（ベッド落下検知用）
   std::chrono::steady_clock::time_point last_seen;
   std::chrono::steady_clock::time_point lying_start;
+  std::chrono::steady_clock::time_point lying_stable;  // 横たわり状態が安定した時刻
   std::chrono::steady_clock::time_point standing_confirmed;  // 立っている状態が確定した時刻
   std::chrono::steady_clock::time_point sitting_confirmed;  // 座っている状態が確定した時刻
   std::chrono::steady_clock::time_point head_position_recorded;  // 頭の位置を記録した時刻
@@ -201,6 +203,7 @@ class DetectionStore {
       person.sitting_bbox_height = 0.0f;
       person.prev_bbox_top = 0.0f;
       person.prev_bbox_height = 0.0f;
+      person.lying_bbox_top = 0.0f;
       person.frame_count = 0;
       person.active = false;
       person.is_lying = false;
@@ -272,9 +275,11 @@ class DetectionStore {
             person.sitting_bbox_height = 0.0f;
             person.prev_bbox_top = det.top;
             person.prev_bbox_height = det.height;
+            person.lying_bbox_top = 0.0f;
             person.last_seen = now;
             person.last_update = now;
             person.lying_start = now;
+            person.lying_stable = now;
             person.standing_confirmed = now;
             person.sitting_confirmed = now;
             person.head_position_recorded = now;
@@ -425,12 +430,21 @@ class DetectionStore {
       
       // 見つからない場合（bbox消失）
       if (!found) {
-        // 60秒以上見失ったら追跡解除（アラートは出さない）
         auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
             now - person.last_seen).count();
+        
+        // 10秒以上見失ったら徘徊の可能性としてアラート
+        if (elapsed >= 10 && elapsed < 11) {
+          add_alert(person.fixed_id, ALERT_FRAME_OUT, 
+                   "Left the frame - possible wandering", now);
+          std::cout << "[Alert] Fixed ID " << person.fixed_id 
+                   << " left the frame (>10s) - possible wandering" << std::endl;
+        }
+        
+        // 60秒以上見失ったら追跡解除
         if (elapsed >= 60) {
           std::cout << "[Track] Fixed ID " << person.fixed_id 
-                   << " tracking stopped (>60s) - may have left the area" << std::endl;
+                   << " tracking stopped (>60s)" << std::endl;
           person.active = false;
         }
       }
@@ -447,12 +461,39 @@ class DetectionStore {
       return;
     }
     
-    // 横たわり状態の記録（アラートは出さない、ログのみ）
+    // 横たわり状態の記録とベッド落下検知
     if (is_lying) {
       if (person.lying_start.time_since_epoch().count() == 0 || !person.is_lying) {
         person.lying_start = now;
+        person.lying_stable = now;
+        person.lying_bbox_top = det.top;
         std::cout << "[State] ID " << person.fixed_id 
-                 << " 縦長→横長 (lying down)" << std::endl;
+                 << " 縦長→横長 (lying down at Y:" << (int)det.top << ")" << std::endl;
+      } else {
+        // 横たわり状態が3秒以上続いたら安定とみなす
+        auto lying_sec = std::chrono::duration_cast<std::chrono::seconds>(
+            now - person.lying_start).count();
+        if (lying_sec >= 3) {
+          auto stable_sec = std::chrono::duration_cast<std::chrono::seconds>(
+              now - person.lying_stable).count();
+          if (stable_sec == 0) {
+            person.lying_stable = now;
+            person.lying_bbox_top = det.top;
+          }
+          
+          // ベッド落下検知: 横たわり状態から急激にY座標が増加（下に落ちた）
+          float top_diff = det.top - person.lying_bbox_top;
+          if (top_diff > 150.0f) {  // 150px以上下がったら落下
+            add_alert(person.fixed_id, ALERT_BED_FALL, 
+                     "Bed fall detected", now);
+            std::cout << "[Alert] Fixed ID " << person.fixed_id 
+                     << " BED FALL detected! Y:" << (int)person.lying_bbox_top 
+                     << "->" << (int)det.top << " (diff:" << (int)top_diff << ")" << std::endl;
+            // 落下後は新しい位置を基準に
+            person.lying_bbox_top = det.top;
+            person.lying_stable = now;
+          }
+        }
       }
     } else {
       if (person.lying_start.time_since_epoch().count() != 0) {
@@ -461,10 +502,12 @@ class DetectionStore {
         std::cout << "[State] ID " << person.fixed_id 
                  << " 横長→縦長 (standing up, was lying for " 
                  << lying_sec << "s)" << std::endl;
-        // 起き上がったら、転倒アラートを自動確認
+        // 起き上がったら、転倒・落下アラートを自動確認
         acknowledge_alerts_for_person(person.fixed_id);
       }
       person.lying_start = std::chrono::steady_clock::time_point();
+      person.lying_stable = std::chrono::steady_clock::time_point();
+      person.lying_bbox_top = 0.0f;
     }
   }
   
@@ -557,9 +600,11 @@ class DetectionStore {
             person.sitting_bbox_height = 0.0f;
             person.prev_bbox_top = det.top;
             person.prev_bbox_height = det.height;
+            person.lying_bbox_top = 0.0f;
             person.last_seen = now;
             person.last_update = now;
             person.lying_start = now;
+            person.lying_stable = now;
             person.standing_confirmed = now;
             person.sitting_confirmed = now;
             person.head_position_recorded = now;
@@ -834,6 +879,26 @@ void serve_api_client(int client_fd, const std::string &request,
     } else if (method == "POST" && path == "/api/clear") {
       detection_store.clear_all();
       response_body = "{\"status\":\"cleared\"}";
+    } else if (method == "POST" && path == "/api/acknowledge_alert") {
+      // アラート確認
+      size_t cl_pos = request.find("Content-Length:");
+      size_t content_length = 0;
+      if (cl_pos != std::string::npos) {
+        content_length = std::atoi(request.c_str() + cl_pos + 15);
+      }
+      
+      size_t body_start = request.find("\r\n\r\n");
+      std::string body;
+      if (body_start != std::string::npos) {
+        body = request.substr(body_start + 4);
+        if (body.size() < content_length) {
+          body += read_request_body(client_fd, content_length - body.size());
+        }
+      }
+      
+      int index = parse_fixed_id_from_json(body.replace(body.find("\"index\""), 7, "\"fixed_id\""));
+      detection_store.acknowledge_alert(index);
+      response_body = "{\"status\":\"acknowledged\",\"index\":" + std::to_string(index) + "}";
     } else if (method == "POST" && path == "/api/clear_alerts") {
       detection_store.clear_alerts();
       response_body = "{\"status\":\"alerts_cleared\"}";
