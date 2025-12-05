@@ -21,23 +21,18 @@ get_ipv4_cidr() {
 }
 
 HTTP_PORT=${APP_HTTP_PORT:-8080}
-endpoints=()
-add_endpoint() {
-  local dev="$1" label="$2"
-  if ip_cidr=$(get_ipv4_cidr "$dev"); then
-    if [ -n "$ip_cidr" ]; then
-      local ip="${ip_cidr%/*}"
-      endpoints+=("${label}(${dev}): http://${ip}:${HTTP_PORT}")
-    fi
-  fi
-}
+wifi_cidr=$(get_ipv4_cidr wlan0 || true)
+lan_cidr=$(get_ipv4_cidr eth0 || true)
 
-add_endpoint wlan0 "Wi-Fi"
-add_endpoint eth0 "有線"
+wifi_ip=${wifi_cidr%/*}
+lan_ip=${lan_cidr%/*}
 
-if [ ${#endpoints[@]} -gt 0 ]; then
-  endpoint_list=$(IFS=', '; echo "${endpoints[*]}")
-  echo "[prod] 完了: ${endpoint_list} で応答します"
+if [ -n "$wifi_ip" ] && [ -n "$lan_ip" ]; then
+  echo "[prod] 完了: Wi-Fi: http://${wifi_ip}:${HTTP_PORT} / LAN: http://${lan_ip}:${HTTP_PORT} で応答します"
+elif [ -n "$wifi_ip" ]; then
+  echo "[prod] 完了: Wi-Fi: http://${wifi_ip}:${HTTP_PORT} で応答します"
+elif [ -n "$lan_ip" ]; then
+  echo "[prod] 完了: LAN: http://${lan_ip}:${HTTP_PORT} で応答します"
 else
   primary_ip=$(hostname -I | awk '{print $1}')
   if [ -n "$primary_ip" ]; then
