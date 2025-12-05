@@ -506,35 +506,79 @@
             updateData();
         }
 
-        async function resetAll(btn) {
-            if (confirm('追跡とアラートをリセットしますか？\n（部屋にいる人を再度自動登録します）')) {
-                btn.disabled = true;
-                btn.textContent = '🔄 リセット中...';
+        let resetClickCount = 0;
+        let resetClickTimer = null;
 
-                try {
-                    // 並列実行で高速化
-                    await Promise.all([
-                        fetch('/api/clear', { method: 'POST' }),
-                        fetch('/api/clear_alerts', { method: 'POST' })
-                    ]);
-                    alerts = [];
-                    lastAlertCount = 0;
-                    await updateData();
-                } catch (err) {
-                    console.error('Reset failed:', err);
-                    alert('リセットに失敗しました');
-                } finally {
-                    btn.disabled = false;
+        async function resetAll(btn) {
+            // ダブルタップでリセット（確認ダイアログなし）
+            resetClickCount++;
+
+            if (resetClickCount === 1) {
+                btn.textContent = '🔄 もう一度押してリセット';
+                btn.style.background = '#e67e22';
+
+                resetClickTimer = setTimeout(() => {
+                    resetClickCount = 0;
                     btn.textContent = '🔄 リセット';
-                }
+                    btn.style.background = '#0f3460';
+                }, 2000);
+                return;
+            }
+
+            // 2回目のクリック
+            clearTimeout(resetClickTimer);
+            resetClickCount = 0;
+
+            btn.disabled = true;
+            btn.textContent = '🔄 リセット中...';
+            btn.style.background = '#0f3460';
+
+            try {
+                // 並列実行で高速化
+                await Promise.all([
+                    fetch('/api/clear', { method: 'POST' }),
+                    fetch('/api/clear_alerts', { method: 'POST' })
+                ]);
+                alerts = [];
+                lastAlertCount = 0;
+                await updateData();
+
+                btn.textContent = '✓ リセット完了';
+                setTimeout(() => {
+                    btn.textContent = '🔄 リセット';
+                }, 1500);
+            } catch (err) {
+                console.error('Reset failed:', err);
+                btn.textContent = '✗ リセット失敗';
+                setTimeout(() => {
+                    btn.textContent = '🔄 リセット';
+                }, 2000);
+            } finally {
+                btn.disabled = false;
             }
         }
 
         // イベントリスナーを設定（スマホ対応）
-        document.getElementById('resetBtn').addEventListener('click', function (e) {
-            e.preventDefault();
-            resetAll(this);
-        });
+        const resetBtn = document.getElementById('resetBtn');
+        if (resetBtn) {
+            console.log('Reset button found, attaching event listener');
+            resetBtn.addEventListener('click', function (e) {
+                console.log('Reset button clicked!');
+                e.preventDefault();
+                e.stopPropagation();
+                resetAll(this);
+            }, { passive: false });
+
+            // タッチイベントも追加（スマホ用）
+            resetBtn.addEventListener('touchend', function (e) {
+                console.log('Reset button touched!');
+                e.preventDefault();
+                e.stopPropagation();
+                resetAll(this);
+            }, { passive: false });
+        } else {
+            console.error('Reset button not found!');
+        }
 
         setInterval(updateData, 1000);
         updateData();
