@@ -34,12 +34,12 @@ fi
 
 if [ ${#endpoints[@]} -gt 0 ]; then
   endpoint_list=$(IFS=', '; echo "${endpoints[*]}")
-  echo "[prod] 完了: Jetson が起動すると edge-room-monitor アプリが ${endpoint_list} で応答します"
+  echo "[prod] 完了: ${endpoint_list}:8080 で応答します"
 else
   primary_ip=$(hostname -I | awk '{print $1}')
   if [ -n "$primary_ip" ]; then
-    echo "[prod] 完了: Jetson が起動すると edge-room-monitor アプリが http://${primary_ip}:8080 で応答します"
+    echo "[prod] 完了: http://${primary_ip}:8080 で応答します"
   else
-    echo "[prod] 完了: Jetson が起動すると edge-room-monitor アプリが http://<IP>:8080 で応答します (IP は取得できませんでした)"
+    echo "[prod] 完了: IP は取得できませんでした"
   fi
 fi
